@@ -1,0 +1,10 @@
+[Unit]
+Description=WiFi AP Startup Timer
+After=graphical.target
+
+[Timer]
+OnBootSec=120sec
+Unit=wifi-ap-startup.service
+
+[Install]
+WantedBy=timers.target
