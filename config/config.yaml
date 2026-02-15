@@ -1,0 +1,36 @@
+# WLED Manager Configuration
+
+# Web Server Settings
+web:
+  host: 0.0.0.0
+  port: 8080
+  debug: false
+
+# Network Settings
+network:
+  # Default subnet for USB Ethernet adapters
+  default_subnet: "10.0.0.0/24"
+  default_gateway: "10.0.0.1"
+  
+  # DHCP range settings
+  dhcp_range_start: 10
+  dhcp_range_end: 50
+  
+  # Adapter configurations (populated automatically)
+  adapters: {}
+
+# WLED Settings
+wled:
+  # Default HTTP port for WLED controllers
+  default_port: 80
+  
+  # Scan timeout (seconds)
+  scan_timeout: 5
+  
+  # Reserved IPs (populated by user through web interface)
+  reservations: {}
+
+# Logging
+logging:
+  level: INFO
+  file: /var/log/wled-manager.log

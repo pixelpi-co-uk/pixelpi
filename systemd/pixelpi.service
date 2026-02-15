@@ -1,0 +1,15 @@
+[Unit]
+Description=PixelPi - Network Management for USB Ethernet and WLED Controllers
+After=network.target NetworkManager.service dnsmasq.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/pixelpi
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/pixelpi/venv/bin"
+ExecStart=/opt/pixelpi/venv/bin/python3 /opt/pixelpi/src/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

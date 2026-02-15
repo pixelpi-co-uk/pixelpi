@@ -1,0 +1,13 @@
+[Unit]
+Description=USB Ethernet Adapter Initialization
+After=network-pre.target
+Before=network.target NetworkManager.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pixelpi/scripts/usb-adapter-init.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
