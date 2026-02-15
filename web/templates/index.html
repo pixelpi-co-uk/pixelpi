@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - PixelPi{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            Dashboard
+        </h1>
+    </div>
+</div>
+
+<!-- System Status Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    USB Adapters
+                </h5>
+                <h2 class="mb-0" id="adapters-count">-</h2>
+                <small class="text-muted">Detected</small>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    WLED Devices
+                </h5>
+                <h2 class="mb-0" id="wled-count">-</h2>
+                <small class="text-muted">Reserved IPs</small>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    NetworkManager
+                </h5>
+                <h3 class="mb-0">
+                    <span id="nm-status" class="badge bg-secondary">-</span>
+                </h3>
+                <small class="text-muted">Service Status</small>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    dnsmasq
+                </h5>
+                <h3 class="mb-0">
+                    <span id="dnsmasq-status" class="badge bg-secondary">-</span>
+                </h3>
+                <small class="text-muted">DHCP Service</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2 d-md-flex">
+                    <a href="/adapters" class="btn btn-primary">
+                        Manage Adapters
+                    </a>
+                    <a href="/wled" class="btn btn-warning">
+                        Scan for WLED
+                    </a>
+                    <button class="btn btn-secondary" onclick="refreshStatus()">
+                        Refresh Status
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity / Instructions -->
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Getting Started</h5>
+            </div>
+            <div class="card-body">
+                <ol class="mb-0">
+                    <li class="mb-2">
+                        <strong>Configure USB Adapters:</strong> Go to the <a href="/adapters">Adapters</a> page to detect and configure USB-to-Ethernet adapters with static IPs.
+                    </li>
+                    <li class="mb-2">
+                        <strong>Scan for WLED Controllers:</strong> Visit the <a href="/wled">WLED Devices</a> page to discover controllers on your network.
+                    </li>
+                    <li class="mb-2">
+                        <strong>Reserve IP Addresses:</strong> Assign static IPs to WLED controllers by MAC address for consistent connectivity.
+                    </li>
+                </ol>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">System Information</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        <tr>
+                            <td><strong>Web Interface:</strong></td>
+                            <td id="web-interface">Port 8080</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Config File:</strong></td>
+                            <td><code>/etc/wled-manager/config.yaml</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Service:</strong></td>
+                            <td><code>wled-manager.service</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Logs:</strong></td>
+                            <td><code>journalctl -u wled-manager -f</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Load dashboard data
+function loadDashboard() {
+    // Get system status
+    fetch('/api/system/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const status = data.status;
+                
+                // Update counts
+                document.getElementById('adapters-count').textContent = status.adapters_count || 0;
+                document.getElementById('wled-count').textContent = status.reservations_count || 0;
+                
+                // Update service statuses
+                updateServiceStatus('nm-status', status.networkmanager);
+                updateServiceStatus('dnsmasq-status', status.dnsmasq);
+                
+                // Update overall system status
+                const allOk = status.networkmanager && status.dnsmasq;
+                updateSystemStatus(allOk);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading dashboard:', error);
+        });
+}
+
+function updateServiceStatus(elementId, isActive) {
+    const element = document.getElementById(elementId);
+    if (isActive) {
+        element.textContent = 'Active';
+        element.className = 'badge bg-success';
+    } else {
+        element.textContent = 'Inactive';
+        element.className = 'badge bg-danger';
+    }
+}
+
+function updateSystemStatus(isOk) {
+    const statusIcon = document.querySelector('#system-status i');
+    const statusText = document.getElementById('status-text');
+    
+    if (isOk) {
+        statusIcon.className = 'bi bi-circle-fill text-success';
+        statusText.textContent = 'System OK';
+    } else {
+        statusIcon.className = 'bi bi-circle-fill text-danger';
+        statusText.textContent = 'Issues Detected';
+    }
+}
+
+function refreshStatus() {
+    showAlert('Refreshing system status...', 'info');
+    loadDashboard();
+}
+
+// Load on page load
+document.addEventListener('DOMContentLoaded', loadDashboard);
+
+// Auto-refresh every 30 seconds
+setInterval(loadDashboard, 30000);
+</script>
+{% endblock %}
