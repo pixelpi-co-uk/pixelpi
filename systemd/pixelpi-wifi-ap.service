@@ -1,0 +1,13 @@
+[Unit]
+Description=PixelPi WiFi AP Activation
+After=NetworkManager.service network-online.target
+Wants=NetworkManager.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pixelpi/scripts/wifi-ap-start.sh
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
