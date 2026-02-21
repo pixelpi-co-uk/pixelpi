@@ -1,0 +1,406 @@
+"""
+WiFi AP Manager - WiFi Access Point Management
+Manages hostapd configuration for creating a WiFi hotspot
+"""
+
+import subprocess
+import os
+import logging
+from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class WiFiAPManager:
+    """Manages WiFi Access Point configuration and status"""
+    
+    def __init__(self):
+        self.hostapd_conf = '/etc/hostapd/hostapd.conf'
+        self.hostapd_default = '/etc/default/hostapd'
+        self.interface = 'wlan0'
+        self.default_ssid = 'WLED-Manager-AP'
+        self.default_channel = 6
+        self.default_ip = '10.0.2.1'
+    
+    def _run_command(self, cmd: List[str]) -> tuple:
+        """Execute system command and return (success, output, error)"""
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return (True, result.stdout, "")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed: {' '.join(cmd)}: {e.stderr}")
+            return (False, "", e.stderr)
+    
+    def is_installed(self) -> bool:
+        """Check if WiFi AP connection exists"""
+        try:
+            result = subprocess.run(
+                ['/usr/bin/nmcli', 'connection', 'show', 'pixelpi-ap'],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0
+        except:
+            return False
+    
+    def is_enabled(self) -> bool:
+        """Check if WiFi AP is enabled (will auto-start on boot)"""
+        try:
+            result = subprocess.run(
+                ['/usr/bin/nmcli', '-t', '-f', 'AUTOCONNECT', 'connection', 'show', 'pixelpi-ap'],
+                capture_output=True,
+                text=True
+            )
+            return 'yes' in result.stdout
+        except:
+            return False
+    
+    def is_active(self) -> bool:
+        """Check if WiFi AP is currently running"""
+        try:
+            result = subprocess.run(
+                ['/usr/bin/nmcli', 'connection', 'show', '--active'],
+                capture_output=True,
+                text=True
+            )
+            return 'pixelpi-ap' in result.stdout
+        except:
+            return False
+    
+    def get_config(self) -> Optional[Dict]:
+        """Get current WiFi AP configuration from NetworkManager"""
+        if not self.is_installed():
+            return None
+        
+        config = {
+            'ssid': self.default_ssid,
+            'channel': self.default_channel,
+            'interface': self.interface,
+            'ip_address': self.default_ip
+        }
+        
+        try:
+            # Get SSID
+            result = subprocess.run(
+                ['/usr/bin/nmcli', '-t', '-f', '802-11-wireless.ssid', 'connection', 'show', 'pixelpi-ap'],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ssid_line = result.stdout.strip()
+                if ':' in ssid_line:
+                    config['ssid'] = ssid_line.split(':', 1)[1]
+            
+            # Get channel
+            result = subprocess.run(
+                ['/usr/bin/nmcli', '-t', '-f', '802-11-wireless.channel', 'connection', 'show', 'pixelpi-ap'],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                channel_line = result.stdout.strip()
+                if ':' in channel_line:
+                    try:
+                        config['channel'] = int(channel_line.split(':', 1)[1])
+                    except:
+                        pass
+            
+            # Get IP
+            result = subprocess.run(
+                ['/usr/bin/nmcli', '-t', '-f', 'ipv4.addresses', 'connection', 'show', 'pixelpi-ap'],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ip_line = result.stdout.strip()
+                if ':' in ip_line:
+                    ip_with_mask = ip_line.split(':', 1)[1]
+                    if '/' in ip_with_mask:
+                        config['ip_address'] = ip_with_mask.split('/')[0]
+                        
+        except Exception as e:
+            logger.error(f"Error reading NetworkManager config: {e}")
+        
+        return config
+    
+    def get_connected_clients(self) -> List[Dict]:
+        """Get list of connected WiFi clients"""
+        clients = []
+        
+        if not self.is_active():
+            return clients
+        
+        try:
+            # Get clients from ARP table on wlan0
+            output = subprocess.run(
+                ['/usr/sbin/ip', 'neigh', 'show', 'dev', self.interface],
+                capture_output=True,
+                text=True
+            ).stdout
+            
+            for line in output.split('\n'):
+                if 'REACHABLE' in line or 'STALE' in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        clients.append({
+                            'ip': parts[0],
+                            'mac': parts[4],
+                            'state': 'REACHABLE' if 'REACHABLE' in line else 'STALE'
+                        })
+        except Exception as e:
+            logger.error(f"Error getting connected clients: {e}")
+        
+        return clients
+    
+    def configure(self, ssid: str, password: str, channel: int = 6, 
+                 ip_address: str = '10.0.2.1') -> bool:
+        """
+        Configure WiFi AP using NetworkManager
+        
+        Args:
+            ssid: Network name
+            password: WPA2 password (min 8 characters)
+            channel: WiFi channel (1-11)
+            ip_address: IP address for the AP
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Validate inputs
+            if len(password) < 8:
+                logger.error("Password must be at least 8 characters")
+                return False
+            
+            if not 1 <= channel <= 11:
+                logger.error("Channel must be between 1 and 11")
+                return False
+            
+            # Calculate DHCP range for dnsmasq
+            ip_parts = ip_address.split('.')
+            network_prefix = '.'.join(ip_parts[:3])
+            dhcp_start = f"{network_prefix}.10"
+            dhcp_end = f"{network_prefix}.50"
+            
+            # Delete existing connection if it exists
+            subprocess.run(
+                ['/usr/bin/nmcli', 'connection', 'delete', 'pixelpi-ap'],
+                capture_output=True,
+                stderr=subprocess.DEVNULL
+            )
+            
+            # Create NetworkManager AP connection
+            # This is persistent and will auto-start on boot
+            cmd = [
+                '/usr/bin/nmcli', 'connection', 'add',
+                'type', 'wifi',
+                'ifname', self.interface,
+                'con-name', 'pixelpi-ap',
+                'autoconnect', 'yes',
+                'ssid', ssid,
+                '802-11-wireless.mode', 'ap',
+                '802-11-wireless.band', 'bg',
+                '802-11-wireless.channel', str(channel),
+                'ipv4.method', 'shared',
+                'ipv4.addresses', f'{ip_address}/24',
+                'wifi-sec.key-mgmt', 'wpa-psk',
+                'wifi-sec.psk', password
+            ]
+            
+            success, output, error = self._run_command(cmd)
+            
+            if not success:
+                logger.error(f"Failed to create NetworkManager AP connection: {error}")
+                return False
+            
+            logger.info(f"Created NetworkManager AP connection for SSID: {ssid}")
+            
+            # Configure dnsmasq for WiFi AP DHCP
+            self._configure_dnsmasq(ip_address)
+            
+            logger.info("WiFi AP configured successfully using NetworkManager")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error configuring WiFi AP: {e}")
+            return False
+            
+            logger.info("WiFi AP configured successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error configuring WiFi AP: {e}")
+            return False
+    
+    def _configure_dnsmasq(self, ip_address: str) -> bool:
+        """Configure dnsmasq for WiFi AP interface"""
+        try:
+            dnsmasq_conf = '/etc/dnsmasq.conf'
+            
+            # Read current config if file exists, otherwise start with empty config
+            config = ""
+            if os.path.exists(dnsmasq_conf):
+                with open(dnsmasq_conf, 'r') as f:
+                    config = f.read()
+            
+            # Check if wlan0 already configured
+            if f'interface={self.interface}' in config:
+                logger.info("dnsmasq already configured for wlan0")
+                return True
+            
+            # Calculate DHCP range
+            ip_parts = ip_address.split('.')
+            network_prefix = '.'.join(ip_parts[:3])
+            dhcp_start = f"{network_prefix}.10"
+            dhcp_end = f"{network_prefix}.50"
+            
+            # Add WiFi AP configuration
+            wifi_config = f"\n# {self.interface} - WiFi Access Point\n"
+            wifi_config += f"interface={self.interface}\n"
+            wifi_config += f"dhcp-range={self.interface},{dhcp_start},{dhcp_end},24h\n"
+            wifi_config += f"dhcp-option={self.interface},3,{ip_address}\n"
+            wifi_config += f"dhcp-option={self.interface},6,8.8.8.8,8.8.4.4\n"
+            wifi_config += "bind-interfaces\n"
+            
+            # Write config (create or append)
+            with open(dnsmasq_conf, 'a') as f:
+                f.write(wifi_config)
+            
+            logger.info(f"Added dnsmasq configuration for {self.interface}")
+            
+            # Restart dnsmasq to load new configuration
+            subprocess.run(
+                ['/usr/bin/systemctl', 'restart', 'dnsmasq'],
+                capture_output=True
+            )
+            logger.info("Restarted dnsmasq to load WiFi AP DHCP configuration")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error configuring dnsmasq: {e}")
+            return False
+    
+    def enable(self) -> bool:
+        """Enable WiFi AP (activate NetworkManager connection)"""
+        try:
+            # Unblock WiFi (in case it's soft-blocked)
+            subprocess.run(
+                ['/usr/sbin/rfkill', 'unblock', 'wifi'],
+                capture_output=True
+            )
+            
+            # Activate the NetworkManager AP connection
+            # This will auto-start on boot because autoconnect=yes
+            success, _, error = self._run_command([
+                '/usr/bin/nmcli', 'connection', 'up', 'pixelpi-ap'
+            ])
+            
+            if not success:
+                logger.error(f"Failed to activate WiFi AP: {error}")
+                return False
+            
+            # Ensure dnsmasq is running
+            subprocess.run(
+                ['/usr/bin/systemctl', 'enable', 'dnsmasq'],
+                capture_output=True
+            )
+            subprocess.run(
+                ['/usr/bin/systemctl', 'start', 'dnsmasq'],
+                capture_output=True
+            )
+            
+            logger.info("WiFi AP enabled - will auto-start on boot via NetworkManager")
+            return True
+                
+        except Exception as e:
+            logger.error(f"Error enabling WiFi AP: {e}")
+            return False
+    
+    def _assign_ip(self) -> bool:
+        """Assign IP address to wlan0 interface"""
+        try:
+            # Read saved IP or use default
+            ip_address = self.default_ip
+            if os.path.exists('/etc/hostapd/wlan0-ip.conf'):
+                with open('/etc/hostapd/wlan0-ip.conf', 'r') as f:
+                    ip_address = f.read().strip()
+            
+            # Flush existing IP
+            subprocess.run(
+                ['/usr/sbin/ip', 'addr', 'flush', 'dev', self.interface],
+                capture_output=True
+            )
+            
+            # Assign new IP
+            success, _, error = self._run_command([
+                '/usr/sbin/ip', 'addr', 'add', f'{ip_address}/24', 'dev', self.interface
+            ])
+            
+            if not success:
+                logger.warning(f"Could not assign IP to {self.interface}: {error}")
+                return False
+            
+            # Bring interface up
+            subprocess.run(
+                ['/usr/sbin/ip', 'link', 'set', self.interface, 'up'],
+                capture_output=True
+            )
+            
+            logger.info(f"Assigned IP {ip_address} to {self.interface}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error assigning IP: {e}")
+            return False
+    
+    def disable(self) -> bool:
+        """Disable WiFi AP"""
+        try:
+            # Deactivate the NetworkManager AP connection
+            success, _, error = self._run_command([
+                '/usr/bin/nmcli', 'connection', 'down', 'pixelpi-ap'
+            ])
+            
+            if not success:
+                logger.warning(f"Could not deactivate WiFi AP (may not be active): {error}")
+            
+            # Modify connection to not auto-start
+            subprocess.run(
+                ['/usr/bin/nmcli', 'connection', 'modify', 'pixelpi-ap', 'autoconnect', 'no'],
+                capture_output=True
+            )
+            
+            logger.info("WiFi AP disabled - will not auto-start on boot")
+            return True
+                
+        except Exception as e:
+            logger.error(f"Error disabling WiFi AP: {e}")
+            return False
+    
+    def restart(self) -> bool:
+        """Restart WiFi AP service"""
+        try:
+            success, _, _ = self._run_command(['/usr/bin/systemctl', 'restart', 'hostapd'])
+            
+            # Also restart dnsmasq
+            subprocess.run(
+                ['/usr/bin/systemctl', 'restart', 'dnsmasq'],
+                capture_output=True
+            )
+            
+            if success:
+                logger.info("WiFi AP restarted")
+                return True
+            else:
+                logger.error("Failed to restart WiFi AP")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error restarting WiFi AP: {e}")
+            return False
