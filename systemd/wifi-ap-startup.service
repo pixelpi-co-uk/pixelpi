@@ -1,8 +1,0 @@
-[Unit]
-Description=WiFi AP Startup
-
-[Service]
-Type=oneshot
-ExecStart=/opt/pixelpi/scripts/assign-wlan0-ip.sh
-ExecStart=/usr/bin/systemctl start hostapd
-ExecStart=/usr/bin/systemctl start dnsmasq
